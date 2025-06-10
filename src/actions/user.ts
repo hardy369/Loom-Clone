@@ -1,39 +1,161 @@
-'use server'
+"use server"
 
 import { client } from "@/lib/prisma"
 import { currentUser } from "@clerk/nextjs/server"
 
-export const onAuthenticateUser = async () => {
+export const verifyAccessToWorkspace = async (workSpaceId: string) => { 
     try {
-      const user = await currentUser();
-      
-      if (!user) {
-        return { status: 401, message: "User not authenticated" };
-      }
-  
-      // Use upsert to handle race conditions
-      // This will either update existing user or create new one atomically
-      const authenticatedUser = await client.user.upsert({
-        where: {
-          email: user.emailAddresses[0]?.emailAddress,
-        },
-        update: {
-          // Update any fields if user exists (optional)
-          clerkid: user.id,
-        },
-        create: {
-          clerkid: user.id,
-          email: user.emailAddresses[0]?.emailAddress,
-          // Add other required fields for user creation
-          // name: user.firstName + " " + user.lastName,
-          // etc.
-        },
-      });
-  
-      return { status: 200, user: authenticatedUser };
-      
+        const user = await currentUser()
+
+        if (!user) return { status: 403 }
+        
+        const isUserInWorkspace = await client.workSpace.findUnique({
+            where: {
+                id: workSpaceId,
+                OR: [
+                    {
+                        User: {
+                            clerkid: user.id,
+                        }
+                    },
+                    {
+                        members: {
+                            every: {
+                                User: {
+                                    clerkid: user.id,
+                                },
+                            },
+                        },
+                    },
+                ],
+            },
+        })
+        return {
+            status: 200,
+            data: { workspace: isUserInWorkspace }
+        }
     } catch (error) {
-      console.error("Authentication error:", error);
-      return { status: 500, message: "Authentication failed" };
+        return {
+            status: 403,
+            data: { workspace: null }
+        }
     }
-  };
+}
+
+export const getWorkspaceFolders = async(workSpaceId: string)=>{
+    try {
+        const isFolders = await client.folder.findMany({
+            where:{
+                workSpaceId,
+            },
+            include:{
+                _count:{
+                    select:{
+                        videos: true,
+                    },
+                },
+            },
+        })
+        if(isFolders && isFolders.length > 0){
+            return {status: 200, data:isFolders}
+        }
+        return{
+            status:400,data:[]
+        }
+    } catch (error) {
+        return {status: 403, data :[] }
+        
+    }
+}
+
+export const getAllUSerVideos = async(workSpaceId:string)=>{
+  try {
+    const user = await currentUser()
+    if(!user){
+        return {status: 404}
+        const videos = await client.video.findMany({
+            where:{
+                OR: [
+                 { workSpaceId },
+                  { folderId: workSpaceId }
+                   ]
+            },
+            select:{
+                id:true,
+                title:true,
+                createdAt: true,
+                source: true,
+                processing: true,
+                folder:{
+                    select:{
+                       id: true,
+                       name: true,
+                    },
+                },
+                User:{
+                   select:{
+                    firstname:true,
+                    lastname:true,
+                    image:true,
+                   },
+                },
+            },
+            orderBy:{
+                createdAt:'asc',
+            },
+        })
+        if(videos&& videos.length >0){
+            return {
+                status : 200, data :videos
+            }
+        }
+        return{ status:400}
+    }
+  } catch (error) {
+     return{ status:400}
+  }
+}
+
+export const getWorkSpaces = async()=>{
+   try {
+    const user = await currentUser()
+
+    if(!user) return {status:404}
+    const workspaces = await client.user.findUnique({
+        where:{
+            clerkid : user.id,
+        },
+        select:{
+            subscription:{
+                select:{
+                    plan:true,
+                },
+            },
+            workspace:{
+                select:{
+                    id:true,
+                    name:true,
+                    type:true,
+                },
+            },
+            members:{
+                select:{
+                    WorkSpace:{
+                        select:{
+                            id:true,
+                            name:true,
+                            type:true,
+                        },
+                    },
+                },
+            },
+        },
+    })
+    if(workspaces){
+        return{status: 200, data:workspaces}
+    }
+
+   } catch (error) {
+     return {status:400}
+   }
+}
